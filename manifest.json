@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.rickeyfaneite.omapegui",
+  "name": "OmaPegui",
+  "version": "0.1.0",
+  "author": "Ricardo Faneite",
+  "license": "MIT",
+  "description": "A clipboard history strip for Omarchy: cards along the bottom edge, search, saved categories, built on the history Omarchy already records.",
+  "kinds": [
+    "overlay"
+  ],
+  "keepLoaded": true,
+  "entryPoints": {
+    "overlay": "OmaPegui.qml"
+  }
+}
