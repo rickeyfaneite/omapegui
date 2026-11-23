@@ -9,6 +9,7 @@ import qs.Ui
 import "ClipboardHistory.js" as ClipboardHistory
 import "Classify.js" as Classify
 import "Categories.js" as Categories
+import "Grab.js" as Grab
 
 // OmaPegui: a bottom-edge strip of clipboard cards.
 //
@@ -33,6 +34,7 @@ Item {
   readonly property string imgScript: root.pluginDir + "/img-save.sh"
   readonly property string imgRmScript: root.pluginDir + "/img-rm.sh"
   readonly property string imgPutScript: root.pluginDir + "/img-put.sh"
+  readonly property string grabScript: root.pluginDir + "/grab.sh"
   readonly property string setupScript: root.pluginDir + "/setup.sh"
   readonly property string stockImagesDir: root.home + "/.local/state/omarchy/clipboard-images"
   readonly property string historyPath: root.home + "/.local/state/omarchy/clipboard-history.json"
@@ -213,6 +215,170 @@ Item {
   function toggle() {
     if (root.opened) root.close()
     else root.open("{}")
+  }
+
+
+  // ---------------------------------------------------------------- copy to category
+  // omarchy-shell io.github.rickeyfaneite.omapegui saveToCategory
+  IpcHandler {
+    target: "io.github.rickeyfaneite.omapegui"
+
+    function saveToCategory(): string {
+      return root.startGrab()
+    }
+  }
+
+  property bool grabBusy: false
+  property bool pickOpen: false
+  property string pickPhase: "list"      // "list" | "name" | "msg"
+  property var pickItem: null
+  property string pickFilter: ""
+  property string pickName: ""
+  property string pickMessage: ""
+  property int pickCursor: 0
+  property var pickScreen: null
+  readonly property var pickListItems: Grab.pickerItems(root.store.categories, root.pickFilter, root.catColor)
+
+  // Reads the selection (Ctrl+C, or PRIMARY in a terminal), then opens the picker.
+  function startGrab() {
+    if (root.grabBusy || root.pickOpen || root.opened) return "busy"
+    if (!root.catsWritable) {
+      root.openPicker(null, "Saved clips are read-only")
+      return "blocked"
+    }
+    root.grabBusy = true
+    root.runCapture(["hyprctl", "-j", "activewindow"], 2000, function(ok, text) {
+      var cls = ""
+      if (ok) { try { cls = String(JSON.parse(text)["class"] || "") } catch (e) { cls = "" } }
+      var mode = Grab.isTerminal(cls) ? "primary" : "copy"
+      root.runCapture([root.grabScript, mode], 5000, function(ok2, out) {
+        root.grabBusy = false
+        var g = ok2 ? Grab.parseGrab(out) : null
+        if (!g) root.openPicker(null, "Could not read the selection")
+        else if (g.kind === "none") root.openPicker(null, "Nothing selected")
+        else root.openPicker(g, "")
+      })
+    })
+    return "started"
+  }
+
+  function openPicker(item, message) {
+    themeFile.reload()
+    root.pickScreen = root.focusedScreen()
+    root.pickItem = item
+    root.pickFilter = ""
+    root.pickName = ""
+    root.pickCursor = 0
+    root.pickMessage = message
+    root.pickPhase = message ? "msg" : "list"
+    root.pickOpen = true
+    root.caretOn = true
+    if (message) { pickTimer.interval = 1600; pickTimer.restart() }
+    Qt.callLater(function() { pickKeys.forceActiveFocus() })
+  }
+
+  // Closes the picker. A picked-up image nobody saved is cleaned up again.
+  function closePicker() {
+    pickTimer.stop()
+    var item = root.pickItem
+    root.pickOpen = false
+    root.pickItem = null
+    if (item && item.kind === "image" && !item.chosen) root.enqueueImageOp({ kind: "gc", names: [item.name] })
+  }
+
+  function pickMove(delta) {
+    var items = root.pickListItems
+    var at = root.pickCursor
+    for (var n = 0; n < items.length; n++) {
+      at = (at + delta + items.length) % items.length
+      if (!items[at].separator) break
+    }
+    root.pickCursor = at
+  }
+
+  function pickChoose(index) {
+    var item = root.pickListItems[index]
+    if (!item || item.separator) return
+    if (item.id === "new") {
+      root.pickName = root.pickFilter.trim().slice(0, 40)
+      root.pickPhase = "name"
+    } else if (item.id.indexOf("cat:") === 0) {
+      root.pickSave(item.id.substring(4))
+    }
+  }
+
+  function pickFinishName() {
+    var name = root.pickName.trim()
+    if (!name) return
+    if (root.store.categories.length >= Categories.maxCategories) {
+      root.pickResult("Up to " + Categories.maxCategories + " categories", false)
+      return
+    }
+    var id = root.createCategory(name, null)
+    if (!id) root.pickResult("Could not create the category", false)
+    else root.pickSave(id)
+  }
+
+  function pickSave(catId) {
+    var g = root.pickItem
+    if (!g) return
+    g.chosen = true
+    var isImage = g.kind === "image"
+    var t = {
+      entryType: isImage ? "image" : "text", text: g.text || "",
+      path: isImage ? root.imagesDir + "/" + g.name : "", mime: g.mime
+    }
+    root.saveTarget(t, catId, function(text, ok) { root.pickResult(text, ok) })
+  }
+
+  // The outcome, shown in the picker for a moment, then it closes. What was
+  // selected stays on the regular clipboard: it already is there after Ctrl+C,
+  // and a PRIMARY selection is copied now that it has been saved.
+  function pickResult(text, ok) {
+    var g = root.pickItem
+    if (ok && g && g.kind === "text" && g.src === "primary") root.runCmd([root.putScript, "copy"], g.text, null, 5000)
+    if (!ok && g && g.kind === "image") root.enqueueImageOp({ kind: "gc", names: [g.name] })
+    root.pickMessage = text
+    root.pickPhase = "msg"
+    pickTimer.interval = ok ? 900 : 1600
+    pickTimer.restart()
+  }
+
+  Timer {
+    id: pickTimer
+    onTriggered: root.closePicker()
+  }
+
+  Timer {
+    interval: 530
+    repeat: true
+    running: root.pickOpen
+    onTriggered: root.caretOn = !root.caretOn
+  }
+
+  function pickKey(event) {
+    event.accepted = true
+    var text = event.text
+    var printable = text && text.length === 1 && text.charCodeAt(0) >= 32 && text.charCodeAt(0) !== 127
+    var ctrl = (event.modifiers & Qt.ControlModifier) && !(event.modifiers & (Qt.AltModifier | Qt.MetaModifier))
+    if (root.pickPhase === "msg") {
+      if (event.key === Qt.Key_Escape) root.closePicker()
+      return
+    }
+    if (root.pickPhase === "name") {
+      if (event.key === Qt.Key_Escape) root.pickPhase = "list"
+      else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) root.pickFinishName()
+      else if (event.key === Qt.Key_Backspace) root.pickName = ctrl ? root.pickName.replace(/\s+$/, "").replace(/\S+$/, "") : root.pickName.slice(0, -1)
+      else if (!ctrl && printable && root.pickName.length < 40) root.pickName += text
+      return
+    }
+    if (event.key === Qt.Key_Escape) root.closePicker()
+    else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) root.pickChoose(root.pickCursor)
+    else if (event.key === Qt.Key_Up) root.pickMove(-1)
+    else if (event.key === Qt.Key_Down) root.pickMove(1)
+    else if (event.key === Qt.Key_Backspace) { root.pickFilter = ctrl ? root.pickFilter.replace(/\s+$/, "").replace(/\S+$/, "") : root.pickFilter.slice(0, -1); root.pickCursor = 0 }
+    else if (ctrl && event.key === Qt.Key_U) { root.pickFilter = ""; root.pickCursor = 0 }
+    else if (!ctrl && printable && root.pickFilter.length < 40) { root.pickFilter += text; root.pickCursor = 0 }
   }
 
   // ---------------------------------------------------------------- screen
@@ -848,7 +1014,7 @@ Item {
   function runImageSave(op) {
     root.runCmd([root.imgScript, op.src, op.name], null, function(ok) {
       if (!ok) {
-        root.flash(op.t, "Could not save", false)
+        op.say("Could not save", false)
         root.imageOpDone()
         return
       }
@@ -856,9 +1022,9 @@ Item {
       root.invalidateMeta(root.imagesDir + "/" + op.name)
       var r = Categories.addClip(root.store, op.catId, op.clip)
       if (r.added && root.commitData(r.data)) {
-        root.flash(op.t, "Saved to " + op.catName, false)
+        op.say("Saved to " + op.catName, true)
       } else {
-        root.flash(op.t, r.reason === "duplicate" ? "Already in " + op.catName : "Could not save", false)
+        op.say(r.reason === "duplicate" ? "Already in " + op.catName : "Could not save", false)
         // The copy has no reference: let the checked cleanup decide about the file.
         root.enqueueImageOp({ kind: "gc", names: [op.name] })
       }
@@ -916,9 +1082,15 @@ Item {
   }
 
   // Saves the entry's own content into a category (a copy that outlives the history).
-  function saveTarget(t, catId) {
+  // `report` (optional) is told the outcome as (text, ok); by default it is shown
+  // on the card the entry came from.
+  function saveTarget(t, catId, report) {
     var cat = Categories.find(root.store, catId)
-    if (!t || !cat || !root.catsWritable) return
+    if (!t || !cat || !root.catsWritable) {
+      if (report) report("Could not save", false)
+      return
+    }
+    var say = report || function(text, ok) { root.flash(t, text, false) }
     var clip = { id: Categories.newId("k"), savedAt: Date.now() }
     if (t.entryType === "image") {
       var name = t.path.substring(t.path.lastIndexOf("/") + 1)
@@ -927,10 +1099,10 @@ Item {
       clip.mime = t.mime
       var probe = Categories.addClip(root.store, catId, clip)
       if (!probe.added) {
-        root.flash(t, probe.reason === "duplicate" ? "Already in " + cat.name : "Could not save", false)
+        say(probe.reason === "duplicate" ? "Already in " + cat.name : "Could not save", false)
         return
       }
-      root.enqueueImageOp({ kind: "save", src: t.path, name: name, catId: catId, catName: cat.name, clip: clip, t: t })
+      root.enqueueImageOp({ kind: "save", src: t.path, name: name, catId: catId, catName: cat.name, clip: clip, t: t, say: say })
       return
     }
     clip.type = "text"
@@ -938,13 +1110,13 @@ Item {
     var r = Categories.addClip(root.store, catId, clip)
     if (r.added && root.commitData(r.data)) {
       root.rebuildIfOpen()
-      root.flash(t, "Saved to " + cat.name, false)
+      say("Saved to " + cat.name, true)
     } else if (r.reason === "toolarge") {
-      root.flash(t, "Too large (1 MiB max)", false)
+      say("Too large (1 MiB max)", false)
     } else if (root.commitReason === "toolarge") {
-      root.flash(t, "Saved clips are full", false)
+      say("Saved clips are full", false)
     } else {
-      root.flash(t, r.reason === "duplicate" ? "Already in " + cat.name : "Could not save", false)
+      say(r.reason === "duplicate" ? "Already in " + cat.name : "Could not save", false)
     }
   }
 
@@ -2307,6 +2479,157 @@ Item {
       onChosen: function(index) {
         root.subCursor = index
         root.runMenuItem(root.subItems[index])
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------- picker
+  // The small panel "copy to category" asks its question in. Its own layer, so
+  // it never touches the strip.
+  PanelWindow {
+    id: pickWin
+    visible: root.pickOpen && !!root.pickScreen
+    screen: root.pickScreen
+    anchors { left: true; right: true; top: true; bottom: true }
+    color: "transparent"
+    exclusionMode: ExclusionMode.Ignore
+    WlrLayershell.namespace: "omapegui-picker"
+    WlrLayershell.layer: WlrLayer.Overlay
+    WlrLayershell.keyboardFocus: root.pickOpen ? WlrKeyboardFocus.Exclusive : WlrKeyboardFocus.None
+
+    // A press outside the picker cancels it and is not passed on.
+    MouseArea {
+      anchors.fill: parent
+      acceptedButtons: Qt.AllButtons
+      onPressed: root.closePicker()
+    }
+
+    Item {
+      id: pickKeys
+      anchors.fill: parent
+      focus: true
+      Keys.priority: Keys.BeforeItem
+      Keys.onPressed: function(event) { root.pickKey(event) }
+    }
+
+    Item {
+      id: pickBox
+      width: Style.space(320)
+      height: pickHead.height + (pickList.visible ? pickList.height + Style.space(6) : 0)
+      x: Math.round((parent.width - width) / 2)
+      y: Math.round(parent.height * 0.26)
+
+      BorderSurface {
+        id: pickHead
+        width: parent.width
+        height: root.pickPhase === "msg" ? Style.space(60) : Style.space(112)
+        radius: root.cardRadius + Style.space(3)
+        color: root.cardColor
+        borderSpec: root.borderSpec
+        MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons; onClicked: {} }
+
+        Text {
+          id: pickTitle
+          anchors.left: parent.left
+          anchors.right: parent.right
+          anchors.top: root.pickPhase === "msg" ? undefined : parent.top
+          anchors.verticalCenter: root.pickPhase === "msg" ? parent.verticalCenter : undefined
+          anchors.margins: Style.space(16)
+          text: root.pickPhase === "msg" ? root.pickMessage : (root.pickPhase === "name" ? "New category" : "Save to category")
+          color: root.textColor
+          elide: Text.ElideRight
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.title
+          font.bold: true
+          textFormat: Text.PlainText
+        }
+
+        Text {
+          visible: root.pickPhase !== "msg"
+          anchors.left: parent.left
+          anchors.right: parent.right
+          anchors.top: pickTitle.bottom
+          anchors.leftMargin: Style.space(16)
+          anchors.rightMargin: Style.space(16)
+          anchors.topMargin: Style.space(2)
+          text: Grab.describe(root.pickItem)
+          color: root.textColor
+          opacity: 0.55
+          elide: Text.ElideRight
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          textFormat: Text.PlainText
+        }
+
+        Rectangle {
+          visible: root.pickPhase !== "msg"
+          anchors.left: parent.left
+          anchors.right: parent.right
+          anchors.bottom: parent.bottom
+          anchors.margins: Style.space(16)
+          height: Style.space(34)
+          radius: height / 2
+          color: Util.alpha(root.textColor, 0.07)
+          border.width: 1
+          border.color: Util.alpha(root.accent, 0.85)
+
+          Item {
+            anchors.fill: parent
+            anchors.leftMargin: Style.space(16)
+            anchors.rightMargin: Style.space(16)
+            clip: true
+
+            Text {
+              id: pickInput
+              anchors.verticalCenter: parent.verticalCenter
+              x: Math.min(0, parent.width - width - pickCaret.width - 2)
+              text: root.pickPhase === "name" ? root.pickName : root.pickFilter
+              color: root.textColor
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.title
+              textFormat: Text.PlainText
+            }
+            Rectangle {
+              id: pickCaret
+              anchors.verticalCenter: parent.verticalCenter
+              x: pickInput.x + pickInput.width + 1
+              width: Math.max(1, Style.space(2))
+              height: Style.font.title + 2
+              color: root.accent
+              visible: root.caretOn
+            }
+            Text {
+              visible: pickInput.text.length === 0
+              anchors.verticalCenter: parent.verticalCenter
+              anchors.left: parent.left
+              anchors.leftMargin: Style.space(8)
+              text: root.pickPhase === "name" ? "Name" : "Type to filter"
+              color: root.textColor
+              opacity: 0.45
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.title
+              textFormat: Text.PlainText
+            }
+          }
+        }
+      }
+
+      MenuList {
+        id: pickList
+        y: pickHead.height + Style.space(6)
+        shown: root.pickPhase === "list"
+        items: root.pickListItems
+        cursor: root.pickCursor
+        maxHeight: Style.space(300)
+        menuWidth: parent.width
+        textColor: root.textColor
+        selectedBackground: Commons.Color.menu.selectedBackground
+        selectedText: Commons.Color.menu.selectedText
+        dangerColor: Commons.Color.urgent
+        fontFamily: root.fontFamily
+        color: root.cardColor
+        onHovered: function(index) { root.pickCursor = index }
+        onChosen: function(index) { root.pickCursor = index; root.pickChoose(index) }
       }
     }
   }

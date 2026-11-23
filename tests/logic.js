@@ -5,6 +5,7 @@ const root = path.join(__dirname, "..")
 const C = require(path.join(root, "Classify.js"))
 const K = require(path.join(root, "Categories.js"))
 const H = require(path.join(root, "ClipboardHistory.js"))
+const G = require(path.join(root, "Grab.js"))
 
 let passed = 0
 function test(name, fn) {
@@ -179,6 +180,43 @@ test("a search inside a category matches the name as well as the text", () => {
   assert.ok(K.clipHaystack(clip).indexOf("zebra") >= 0)
   assert.ok(K.clipHaystack(clip).indexOf("hello") >= 0)
   assert.ok(K.clipHaystack({ type: "text", text: "hello" }).indexOf("zebra") < 0)
+})
+
+test("terminal windows are recognised by class, not Ctrl+C-able apps", () => {
+  for (const c of ["alacritty", "Alacritty", "kitty", "foot", "ghostty", "com.mitchellh.ghostty", "wezterm", "org.wezfurlong.wezterm", "FOOT"])
+    assert.strictEqual(G.isTerminal(c), true, c)
+  for (const c of ["firefox", "chromium", "org.gnome.Nautilus", "", undefined, null, "footprint", "terminal"])
+    assert.strictEqual(G.isTerminal(c), false, String(c))
+})
+
+test("the grab helper's answer is read strictly", () => {
+  assert.deepStrictEqual(G.parseGrab("OMAPEGUI-GRAB kind=text src=primary\nhello\nworld"), { kind: "text", src: "primary", mime: "text/plain", name: "", text: "hello\nworld" })
+  assert.strictEqual(G.parseGrab("OMAPEGUI-GRAB kind=text src=clipboard\n   \n").kind, "none")
+  assert.strictEqual(G.parseGrab("OMAPEGUI-GRAB kind=none").kind, "none")
+  const good = "OMAPEGUI-GRAB kind=image src=clipboard mime=image/png name=" + "a".repeat(64) + ".png"
+  assert.strictEqual(G.parseGrab(good).kind, "image")
+  assert.strictEqual(G.parseGrab(good).name, "a".repeat(64) + ".png")
+  for (const bad of ["", "hello", "OMAPEGUI-GRAB kind=image src=clipboard mime=image/png name=../x.png",
+      "OMAPEGUI-GRAB kind=image src=clipboard mime=image/svg+xml name=" + "a".repeat(64) + ".png",
+      "OMAPEGUI-GRAB kind=image src=clipboard mime=image/png name=" + "A".repeat(64) + ".png",
+      "OMAPEGUI-GRAB kind=weird"])
+    assert.strictEqual(G.parseGrab(bad), null, bad)
+})
+
+test("the picker lists matching categories, then New category", () => {
+  const cats = [{ id: "a", name: "Work", color: "blue" }, { id: "b", name: "Recipes", color: "red" }, { id: "c", name: "Workout", color: "red" }]
+  const all = G.pickerItems(cats, "", null)
+  assert.deepStrictEqual(all.map(i => i.id || "sep"), ["cat:a", "cat:b", "cat:c", "sep", "new"])
+  assert.deepStrictEqual(G.pickerItems(cats, " WORK ", null).map(i => i.id || "sep"), ["cat:a", "cat:c", "sep", "new"])
+  assert.deepStrictEqual(G.pickerItems(cats, "zzz", null).map(i => i.id), ["new"])
+  assert.deepStrictEqual(G.pickerItems([], "", null).map(i => i.id), ["new"])
+  assert.strictEqual(G.pickerItems(cats, "", c => "col-" + c.color)[0].swatch, "col-blue")
+})
+
+test("the picker describes what it is about to save on one short line", () => {
+  assert.strictEqual(G.describe({ kind: "image" }), "Image")
+  assert.strictEqual(G.describe({ kind: "text", text: "a\n  b\tc" }), "a b c")
+  assert.ok(G.describe({ kind: "text", text: "x".repeat(200) }).length <= 48)
 })
 
 console.log(passed + " passed" + (process.exitCode ? ", some FAILED" : ""))

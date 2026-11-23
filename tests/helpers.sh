@@ -133,5 +133,51 @@ rm "$S/images/$H.png"
 mkdir "$S/images/$H.png"; chk "destination is a directory -> refused" 1 "$P/img-save.sh" "$STOCK/$H.png" "$H.png"; rmdir "$S/images/$H.png"
 printf 'OLD' > "$S/images/$H.png"; chk "destination is an existing regular file -> replaced" 0 "$P/img-save.sh" "$STOCK/$H.png" "$H.png"
 [[ $(cat "$S/images/$H.png") == PNGDATA ]] && ok "replaced with the new copy" || bad "not replaced"
+echo "---- grab.sh (stub wl-paste and hyprctl)"
+"$P/setup.sh" >/dev/null
+W="$T/wl"; mkdir -p "$W"
+cat > "$T/bin/wl-paste" <<'S'
+#!/bin/bash
+# State in $W: types (one per line), clip.<type-with-slashes-as-_>, primary.
+W="$STUBDIR/wl"; primary=0; type=
+while [[ $# -gt 0 ]]; do case $1 in -p) primary=1 ;; -l) list=1 ;; -t | --type) type=$2; shift ;; esac; shift; done
+if [[ ${list:-0} == 1 ]]; then [[ $primary == 1 ]] && { [[ -s $W/primary ]] && echo text/plain; exit 0; }; [[ -s $W/types ]] && cat "$W/types" || exit 1; exit 0; fi
+if [[ $primary == 1 ]]; then [[ -s $W/primary ]] && cat "$W/primary" || exit 1; exit 0; fi
+case $type in text | text/plain) cat "$W/clip.text" 2>/dev/null || exit 1 ;; *) cat "$W/clip.${type//\//_}" 2>/dev/null || exit 1 ;; esac
+S
+cat > "$T/bin/hyprctl" <<'S'
+#!/bin/bash
+echo "hyprctl args: $*" >> "$STUBLOG"
+W="$STUBDIR/wl"
+# The "up" half of Ctrl+C is when the stub application puts its selection on the clipboard.
+if [[ $* == *'state = "up"'* && -f $W/after ]]; then cp "$W/after.types" "$W/types"; [[ -f $W/after ]] && cp "$W/after" "$W/clip.text"; fi
+S
+chmod +x "$T/bin/wl-paste" "$T/bin/hyprctl"
+reset_wl() { rm -f "$W"/*; : > $STUBLOG; }
+reset_wl; printf 'text/plain\n' > "$W/types"; printf 'old clip' > "$W/clip.text"; printf 'highlighted' > "$W/primary"
+out=$("$P/grab.sh" primary); [[ $out == $'OMAPEGUI-GRAB kind=text src=primary\nhighlighted' ]] && ok "primary: header then the highlighted text" || { bad "primary"; echo "$out"; }
+grep -q "hyprctl" $STUBLOG && bad "primary must not send Ctrl+C" || ok "primary: no Ctrl+C sent"
+reset_wl; printf 'text/plain\n' > "$W/types"; printf 'old clip' > "$W/clip.text"; printf 'new selection' > "$W/after"; printf 'text/plain\n' > "$W/after.types"
+out=$("$P/grab.sh" copy); [[ $out == $'OMAPEGUI-GRAB kind=text src=clipboard\nnew selection' ]] && ok "copy: Ctrl+C changed the clipboard, so the clipboard is used" || { bad "copy changed"; echo "$out"; }
+grep -q 'mods = "CTRL", key = "C", state = "down"' $STUBLOG && grep -q 'state = "up"' $STUBLOG && ok "copy: Ctrl+C sent as down then up" || bad "ctrl-c keys"
+reset_wl; printf 'text/plain\n' > "$W/types"; printf 'same' > "$W/clip.text"; printf 'from primary' > "$W/primary"
+out=$("$P/grab.sh" copy); [[ $out == $'OMAPEGUI-GRAB kind=text src=primary\nfrom primary' ]] && ok "copy: clipboard unchanged, so PRIMARY is used" || { bad "copy fallback"; echo "$out"; }
+reset_wl; printf 'text/plain\n' > "$W/types"; printf 'same' > "$W/clip.text"
+out=$("$P/grab.sh" copy); [[ $out == "OMAPEGUI-GRAB kind=none" ]] && ok "copy: nothing changed and no PRIMARY -> none" || { bad "copy none"; echo "$out"; }
+reset_wl; printf '   \n' > "$W/primary"; out=$("$P/grab.sh" primary); [[ $out == "OMAPEGUI-GRAB kind=none" ]] && ok "whitespace-only selection -> none" || { bad "blank"; echo "$out"; }
+reset_wl; printf 'image/png\n' > "$W/types"; printf 'PNGBYTES' > "$W/clip.image_png"
+printf 'image/png\n' > "$W/after.types"; printf 'x' > "$W/after"; rm -f "$W/types"   # clipboard empty before, an image after
+printf 'PNGBYTES' > "$W/after.img"
+cat > "$T/bin/hyprctl" <<'S'
+#!/bin/bash
+echo "hyprctl args: $*" >> "$STUBLOG"
+W="$STUBDIR/wl"
+[[ $* == *'state = "up"'* ]] && { printf 'image/png\n' > "$W/types"; printf 'PNGBYTES' > "$W/clip.image_png"; }
+exit 0
+S
+out=$("$P/grab.sh" copy); name=$(printf PNGBYTES | sha256sum | cut -d' ' -f1).png
+[[ $out == "OMAPEGUI-GRAB kind=image src=clipboard mime=image/png name=$name" && $(cat "$S/images/$name") == PNGBYTES ]] && ok "an image on the clipboard is saved under its hash" || { bad "image grab"; echo "$out"; }
+[[ $(stat -c %a "$S/images/$name" 2>/dev/null || stat -f %Lp "$S/images/$name") == 600 ]] && ok "image file is private (0600)" || bad "image mode"
+chk "bad mode refused" 2 "$P/grab.sh" nonsense
 echo; [[ $FAILED == 0 ]] && echo "ALL PASSED" || echo "SOME FAILED"
 rm -rf "$T"

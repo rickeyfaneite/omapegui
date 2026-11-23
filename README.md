@@ -82,6 +82,7 @@ You can also toggle the panel from a terminal with `omarchy-shell shell toggle i
 | Click a tab | Switch to it |
 | Right-click a tab | Rename, change color, or delete the category |
 | Click "+" | Create a category |
+| `omarchy-shell io.github.rickeyfaneite.omapegui saveToCategory` | Save the current selection into a category (see Copy to category) |
 | Click outside the strip | Close the panel (with a menu open, a click elsewhere on the strip closes only the menu) |
 
 In a menu, the arrow keys move, Right or Enter opens a submenu or runs the item, Left closes a submenu, and Esc closes only the menu.
@@ -96,6 +97,28 @@ Saved data lives in `~/.local/state/omarchy/omapegui/`:
 - `images/` holds the copies of saved images.
 - `times.json` holds the "copied x ago" labels for history entries.
 - `salt` is a random value used to label those entries (see below).
+
+## Copy to category
+
+Select something in any app, run the command, and a small picker lists your categories. Type to filter, move with the arrow keys, press Enter to choose, Esc to cancel (a click works too). The item is saved into the category as its own copy, with the same limits and checks as Save to category, and it is also left on the regular clipboard. The picker says "Saved to <category>" and closes. "New category…" at the end of the list creates one on the spot.
+
+```bash
+omarchy-shell io.github.rickeyfaneite.omapegui saveToCategory
+```
+
+Bind it to a key or a mouse button in `~/.config/hypr/bindings.lua`, for example:
+
+```lua
+o.bind("SUPER + CTRL + K", "OmaPegui: copy to category", "omarchy-shell io.github.rickeyfaneite.omapegui saveToCategory")
+```
+
+Where the item comes from:
+
+1. The plugin sends Ctrl+C to the focused window and waits briefly. If the clipboard changed, that is the item: text, or an image (PNG, JPEG, WebP or GIF).
+2. In a terminal, Ctrl+C would interrupt the running program, so nothing is sent: the highlighted text (the PRIMARY selection) is used. A terminal is recognised by the window class: `alacritty`, `Alacritty`, `kitty`, `foot`, `footclient`, `ghostty`, `com.mitchellh.ghostty`, `wezterm`, `org.wezfurlong.wezterm`.
+3. If Ctrl+C changed nothing (the same text was already on the clipboard, or the app does not copy), the PRIMARY selection is used. With nothing selected the picker says "Nothing selected" and saves nothing.
+
+Ctrl+C is sent with Hyprland's own key-state dispatcher, the way Omarchy's universal copy does, so it still works when the keys that triggered it are held down. There is no extra daemon: the command is handled by the plugin that is already loaded.
 
 ## Privacy and security
 
