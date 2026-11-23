@@ -39,6 +39,13 @@ function utf8Length(s, cap) {
   return n
 }
 
+// A clip's optional name: plain text, one line, at most maxClipNameLength characters.
+var maxClipNameLength = 80
+function cleanName(value) {
+  if (value === undefined || value === null) return ""
+  return String(value).replace(/[\u0000-\u001f\u007f]+/g, " ").trim().slice(0, maxClipNameLength).trim()
+}
+
 function cleanClip(c) {
   if (!c || typeof c !== "object") return null
   var id = String(c.id || "")
@@ -47,14 +54,20 @@ function cleanClip(c) {
   if (c.type === "text") {
     var text = String(c.text === undefined || c.text === null ? "" : c.text)
     if (text.length === 0) return null
-    return { id: id, type: "text", text: text, savedAt: savedAt }
+    var tc = { id: id, type: "text", text: text, savedAt: savedAt }
+    var tn = cleanName(c.name)
+    if (tn) tc.name = tn
+    return tc
   }
   if (c.type === "image") {
     // Only names of the form the plugin itself generates, with a known image type.
     var image = String(c.image || "")
     var mime = String(c.mime || "image/png")
     if (!imageNamePattern.test(image) || imageMimes.indexOf(mime) < 0) return null
-    return { id: id, type: "image", image: image, mime: mime, savedAt: savedAt }
+    var ic = { id: id, type: "image", image: image, mime: mime, savedAt: savedAt }
+    var inm = cleanName(c.name)
+    if (inm) ic.name = inm
+    return ic
   }
   return null
 }
@@ -197,6 +210,32 @@ function moveClip(data, catId, clipId, delta) {
   })
 }
 
+// Sets (or, with an empty name, clears) a clip's name. The same store comes back
+// when nothing would change.
+function setClipName(data, catId, clipId, name) {
+  var clean = cleanName(name)
+  var cur = findClip(data, catId, clipId)
+  if (!cur || (cur.name || "") === clean) return data
+  return mapCategories(data, function(c) {
+    if (c.id !== catId) return c
+    return { id: c.id, name: c.name, color: c.color, clips: c.clips.map(function(k) {
+      if (k.id !== clipId) return k
+      // Same key order as cleanClip, so a cleared name serializes as it did before.
+      var out = k.type === "image"
+        ? { id: k.id, type: k.type, image: k.image, mime: k.mime, savedAt: k.savedAt }
+        : { id: k.id, type: k.type, text: k.text, savedAt: k.savedAt }
+      if (clean) out.name = clean
+      return out
+    }) }
+  })
+}
+
+// What a search inside a category matches on: the name, then the text.
+function clipHaystack(clip) {
+  var name = clip.name ? clip.name + "\n" : ""
+  return (name + (clip.type === "image" ? "image screenshot" : clip.text.slice(0, displayTextLimit))).toLowerCase()
+}
+
 function clipIndex(data, catId, clipId) {
   var cat = find(data, catId)
   if (!cat) return -1
@@ -231,6 +270,7 @@ function clipRow(clip, imagesDir) {
     // never a fresh lookup by id, which could return a clip changed since.
     clip: clip,
     clipId: clip.id,
+    name: clip.name || "",
     savedAt: clip.savedAt,
     key: "k:" + clip.id,
     capped: !isImage && clip.text.length > displayTextLimit
@@ -242,6 +282,6 @@ if (typeof module !== "undefined") {
     colorCycle: colorCycle, emptyData: emptyData, parse: parse, newId: newId, find: find,
     addCategory: addCategory, renameCategory: renameCategory, recolorCategory: recolorCategory,
     deleteCategory: deleteCategory, addClip: addClip, removeClip: removeClip, moveClip: moveClip,
-    clipIndex: clipIndex, clipRow: clipRow, findClip: findClip, orphanedImages: orphanedImages, utf8Length: utf8Length, maxClipBytes: maxClipBytes, maxStoreBytes: maxStoreBytes, maxCategories: maxCategories, serialize: serialize
+    clipIndex: clipIndex, setClipName: setClipName, clipHaystack: clipHaystack, cleanName: cleanName, maxClipNameLength: maxClipNameLength, clipRow: clipRow, findClip: findClip, orphanedImages: orphanedImages, utf8Length: utf8Length, maxClipBytes: maxClipBytes, maxStoreBytes: maxStoreBytes, maxCategories: maxCategories, serialize: serialize
   }
 }

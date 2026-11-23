@@ -135,4 +135,50 @@ test("a Files card is decided from the whole text, not the display prefix", () =
   assert.strictEqual(H.isFileList(""), false)
 })
 
+test("clip names: set, clear, cap, plain text, unchanged is the same store", () => {
+  let store = K.addCategory(K.emptyData(), "X").data
+  const id = store.categories[0].id
+  store = K.addClip(store, id, { id: "n1", type: "text", text: "hello", savedAt: 1 }).data
+  assert.strictEqual(K.findClip(store, id, "n1").name, undefined)
+  const named = K.setClipName(store, id, "n1", "  Greeting  ")
+  assert.strictEqual(K.findClip(named, id, "n1").name, "Greeting")
+  assert.strictEqual(K.findClip(named, id, "n1").text, "hello")
+  assert.strictEqual(K.setClipName(named, id, "n1", "Greeting"), named)
+  const long = K.setClipName(named, id, "n1", "w".repeat(200))
+  assert.strictEqual(K.findClip(long, id, "n1").name.length, 80)
+  const oneLine = K.setClipName(named, id, "n1", "a\nb\u0000c")
+  assert.strictEqual(K.findClip(oneLine, id, "n1").name, "a b c")
+  const cleared = K.setClipName(named, id, "n1", "   ")
+  assert.ok(!("name" in K.findClip(cleared, id, "n1")))
+  assert.strictEqual(K.serialize(cleared), K.serialize(store))
+  assert.strictEqual(K.setClipName(store, id, "missing", "x"), store)
+  assert.strictEqual(K.setClipName(store, "nocat", "n1", "x"), store)
+})
+
+test("clip names survive a save and read-back, and an old file without names still reads", () => {
+  let store = K.addCategory(K.emptyData(), "X").data
+  const id = store.categories[0].id
+  store = K.addClip(store, id, { id: "n1", type: "text", text: "hello", savedAt: 1 }).data
+  store = K.setClipName(store, id, "n1", "<b>Name</b>")
+  const back = K.parse(K.serialize(store))
+  assert.strictEqual(K.findClip(back, id, "n1").name, "<b>Name</b>")
+  const old = JSON.stringify({ version: 1, categories: [{ id: "c1", name: "Old", color: "blue", clips: [{ id: "a", type: "text", text: "t", savedAt: 5 }] }] })
+  const parsed = K.parse(old)
+  assert.ok(parsed)
+  assert.strictEqual(K.clipRow(parsed.categories[0].clips[0], "/i").name, "")
+  const hostile = K.parse(JSON.stringify({ version: 1, categories: [{ id: "c1", name: "N", color: "blue", clips: [{ id: "a", type: "text", text: "t", savedAt: 5, name: { x: 1 } }, { id: "b", type: "text", text: "u", savedAt: 5, name: "z".repeat(500) }] }] }))
+  assert.strictEqual(hostile.categories[0].clips[1].name.length, 80)
+})
+
+test("a search inside a category matches the name as well as the text", () => {
+  let store = K.addCategory(K.emptyData(), "X").data
+  const id = store.categories[0].id
+  store = K.addClip(store, id, { id: "n1", type: "text", text: "hello", savedAt: 1 }).data
+  store = K.setClipName(store, id, "n1", "Zebra note")
+  const clip = K.findClip(store, id, "n1")
+  assert.ok(K.clipHaystack(clip).indexOf("zebra") >= 0)
+  assert.ok(K.clipHaystack(clip).indexOf("hello") >= 0)
+  assert.ok(K.clipHaystack({ type: "text", text: "hello" }).indexOf("zebra") < 0)
+})
+
 console.log(passed + " passed" + (process.exitCode ? ", some FAILED" : ""))

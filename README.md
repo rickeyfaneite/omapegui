@@ -73,10 +73,10 @@ You can also toggle the panel from a terminal with `omarchy-shell shell toggle i
 | Backspace, Ctrl+Backspace, Ctrl+U | Edit the search text (one character, one word, everything) |
 | Tab, Shift+Tab, Ctrl+Left, Ctrl+Right | Switch between History and the categories |
 | Menu key, Shift+F10 | Open the context menu for the selected card |
-| F2 | Rename the open category |
+| F2 | Rename the selected saved clip; with no clip selected, rename the open category |
 | Shift+Left, Shift+Right | Move the selected clip within a category |
 | Click a card | Copy it, show "Copied", and close the panel |
-| Right-click a card | Open its context menu |
+| Right-click a card | Open its context menu (on a saved clip it includes Rename…) |
 | Hover a card | Select it, so the ringed card is the one a click will take |
 | Mouse wheel | Scroll the strip sideways |
 | Click a tab | Switch to it |
@@ -88,11 +88,11 @@ In a menu, the arrow keys move, Right or Enter opens a submenu or runs the item,
 
 ## Categories
 
-Save to category in the context menu stores a copy of the clip in the category you pick. Choose New category to create one on the spot. Text clips can be up to 1 MiB. A category can be renamed, given another color from the theme, or deleted; deleting asks once.
+Save to category in the context menu stores a copy of the clip in the category you pick. Choose New category to create one on the spot. Text clips can be up to 1 MiB. A saved clip can be given a name (Rename… in its menu, or F2): the name shows on the card in place of the kind label, the preview stays below, and searching inside the category matches the name too. Names are plain text, up to 80 characters, and an empty name clears it. A category can be renamed (right-click its tab), given another color from the theme, or deleted; deleting asks once.
 
 Saved data lives in `~/.local/state/omarchy/omapegui/`:
 
-- `categories.json` holds the categories and the text clips.
+- `categories.json` holds the categories, the text clips and their optional names.
 - `images/` holds the copies of saved images.
 - `times.json` holds the "copied x ago" labels for history entries.
 - `salt` is a random value used to label those entries (see below).

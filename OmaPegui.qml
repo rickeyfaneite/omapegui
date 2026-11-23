@@ -374,8 +374,7 @@ Item {
       for (var c = 0; c < clips.length; c++) {
         var clip = clips[c]
         if (needle) {
-          var hay = clip.type === "image" ? "image screenshot" : clip.text.slice(0, Categories.displayTextLimit).toLowerCase()
-          if (hay.indexOf(needle) < 0) continue
+          if (Categories.clipHaystack(clip).indexOf(needle) < 0) continue
         }
         var crow = Categories.clipRow(clip, root.imagesDir)
         crow.previewImage = crow.previewPath ? Util.fileUrl(crow.previewPath) : ""
@@ -986,11 +985,26 @@ Item {
     root.modal = "name"
   }
 
+  // Rename a saved clip: from the menu, or F2 on the selected saved clip.
+  function askClipName(catId, clipId) {
+    var clip = Categories.findClip(root.store, catId, clipId)
+    if (!clip) return
+    root.askName("clip", { catId: catId, clipId: clipId }, clip.name || "")
+  }
+
   function finishName() {
     var name = root.nameInput.trim()
     var mode = root.nameMode
     var target = root.nameTarget
     root.modal = ""
+    if (mode === "clip") {
+      // An empty name clears it.
+      if (target && Categories.findClip(root.store, target.catId, target.clipId)) {
+        root.commitData(Categories.setClipName(root.store, target.catId, target.clipId, name))
+        root.rebuildIfOpen()
+      }
+      return
+    }
     if (!name) return
     if (mode === "rename") {
       if (Categories.find(root.store, target)) root.commitData(Categories.renameCategory(root.store, target, name))
@@ -1019,6 +1033,7 @@ Item {
     if (root.catsWritable) items.push({ id: "save", label: "Save to category", sub: true })
     items.push({ separator: true })
     if (t.clipId) {
+      if (root.catsWritable) items.push({ id: "renameclip", label: "Rename…", hint: "F2" })
       var at = Categories.clipIndex(root.store, t.catId, t.clipId)
       var cat = Categories.find(root.store, t.catId)
       var count = cat ? cat.clips.length : 0
@@ -1129,6 +1144,7 @@ Item {
     else if (id === "left") root.moveClipTarget(t, -1)
     else if (id === "right") root.moveClipTarget(t, 1)
     else if (id === "remove" || id === "delete") root.removeTarget(t)
+    else if (id === "renameclip") { if (t && t.clipId) root.askClipName(t.catId, t.clipId) }
     else if (id === "newcat") root.askName("new", t)
     else if (id.indexOf("cat:") === 0) root.saveTarget(t, id.substring(4))
     else if (id === "rename") {
@@ -1684,7 +1700,7 @@ Item {
             if (event.key === Qt.Key_Escape) root.modal = ""
             else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) root.finishName()
             else if (event.key === Qt.Key_Backspace) root.nameInput = ctrl ? root.nameInput.replace(/\s+$/, "").replace(/\S+$/, "") : root.nameInput.slice(0, -1)
-            else if (!ctrl && printable && root.nameInput.length < 40) root.nameInput += text
+            else if (!ctrl && printable && root.nameInput.length < (root.nameMode === "clip" ? Categories.maxClipNameLength : 40)) root.nameInput += text
             return
           }
 
@@ -1712,7 +1728,9 @@ Item {
           } else if (event.key === Qt.Key_Menu || (event.key === Qt.Key_F10 && shift)) {
             root.openCardMenuFromKeyboard()
           } else if (event.key === Qt.Key_F2) {
-            if (root.inCategory) root.askName("rename", root.tab, root.activeCat.name)
+            var sel = (root.selectedIndex >= 0 && root.selectedIndex < root.rows.length) ? root.rows[root.selectedIndex] : null
+            if (root.inCategory && sel && sel.clipId) root.askClipName(root.tab, sel.clipId)
+            else if (root.inCategory) root.askName("rename", root.tab, root.activeCat.name)
           } else if (event.key === Qt.Key_Tab) {
             root.cycleTab(1)
           } else if (event.key === Qt.Key_Backtab) {
@@ -2173,7 +2191,7 @@ Item {
           anchors.right: parent.right
           anchors.top: parent.top
           anchors.margins: Style.space(18)
-          text: root.nameMode === "rename" ? "Rename category" : "New category"
+          text: root.nameMode === "clip" ? "Rename clip" : (root.nameMode === "rename" ? "Rename category" : "New category")
           color: root.textColor
           elide: Text.ElideRight
           font.family: root.fontFamily
@@ -2224,7 +2242,7 @@ Item {
               anchors.verticalCenter: parent.verticalCenter
               anchors.left: parent.left
               anchors.leftMargin: Style.space(8)
-              text: "Name"
+              text: root.nameMode === "clip" ? "Name (optional)" : "Name"
               color: root.textColor
               opacity: 0.45
               font.family: root.fontFamily
@@ -2238,7 +2256,7 @@ Item {
           anchors.left: parent.left
           anchors.bottom: parent.bottom
           anchors.margins: Style.space(18)
-          text: "Enter to save · Esc to cancel"
+          text: root.nameMode === "clip" ? "Enter to save, empty clears the name · Esc to cancel" : "Enter to save · Esc to cancel"
           color: root.textColor
           opacity: 0.5
           font.family: root.fontFamily

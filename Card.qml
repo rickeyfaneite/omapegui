@@ -33,6 +33,7 @@ Item {
   layer.enabled: opacity < 1
 
   readonly property string kind: row ? row.kind : "text"
+  readonly property string clipName: row && row.name ? String(row.name) : ""
   readonly property string full: row ? String(row.fullText || "") : ""
   readonly property int pad: Style.space(12)
   readonly property int headerHeight: Style.space(28)
@@ -70,7 +71,10 @@ Item {
         anchors.left: parent.left
         anchors.leftMargin: card.pad
         anchors.verticalCenter: parent.verticalCenter
-        text: Classify.kindLabel(card.kind)
+        // A saved clip's own name takes the place of the kind label.
+        width: Math.max(0, header.width - timeLabel.width - card.pad * 3)
+        elide: Text.ElideRight
+        text: card.clipName ? card.clipName : Classify.kindLabel(card.kind)
         color: card.headerText
         font.family: card.fontFamily
         font.pixelSize: Style.font.bodySmall
@@ -79,6 +83,7 @@ Item {
       }
 
       Text {
+        id: timeLabel
         anchors.right: parent.right
         anchors.rightMargin: card.pad
         anchors.verticalCenter: parent.verticalCenter
